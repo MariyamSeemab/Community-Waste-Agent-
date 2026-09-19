@@ -1,8 +1,4 @@
-<div align="center">
-🏆 Agents for Humans Hackathon Submission
-Track: Good Neighbor Agents
-
-An agent that helps groups of people, not just one: neighborhoods, nonprofits, food banks, schools, libraries, and small local orgs.
+<div align="center"> <h2>🏆 Agents for Humans Hackathon Submission</h2> <h3>Track: Good Neighbor Agents</h3> <p><i>An agent that helps groups of people, not just one:<br> neighborhoods, nonprofits, food banks, schools, libraries, and small local orgs.</i></p> <br>
 
 # 🤖 Good Neighbor Agent
 

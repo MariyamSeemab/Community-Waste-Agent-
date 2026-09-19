@@ -1,0 +1,194 @@
+# Good Neighbor Agent — Frontend
+
+A single-page web app (no build step) that lets a community member sign in and
+chat with the Good Neighbor Agent. It runs in one of **three modes** depending on
+what's configured in `config.js` — no code changes needed:
+
+| Mode | When | What happens | Header badge |
+|------|------|--------------|--------------|
+| **Connected to AWS** | Cognito + AgentCore runtime configured | Sign in via Cognito email OTP, then call the **AgentCore Runtime** (Amazon Nova agent) with the JWT | green "Connected to AWS" |
+| **Live backend data** | only `BACKEND_API_URL` set | Any email + code `123456`, then the SPA calls the **deployed backend API directly** and composes answers from real data | green "Live backend data" |
+| **Demo mode** | nothing configured | Any email + code `123456`, replies are mocked locally | yellow "Demo mode" |
+
+## Files
+
+```
+static/
+├── index.html    # Markup: login screen, chat view, "How it works" modal
+├── app.js        # Cognito sign-in + AgentCore/backend calls + rendering + modes
+├── styles.css    # Animated dark-theme chat UI (aurora, entrance animations)
+├── config.js     # Runtime config (Cognito, AgentCore, BACKEND_API_URL)
+└── AgentCode/    # The backend agent (deployed separately; not web-served)
+```
+
+## How "Connected to AWS" mode works
+
+```
+┌─────────┐  1. email → code  ┌──────────────┐
+│ Browser │ ────────────────▶ │ Amazon       │  (Cognito emails the OTP
+│  (SPA)  │ ◀──── JWT ──────── │ Cognito      │   itself — no SES, no Lambda)
+└────┬────┘                    └──────────────┘
+     │ 2. POST /runtimes/{arn}/invocations
+     │    Authorization: Bearer <JWT>
+     │    body: { "prompt": "<your question>" }
+     ▼
+┌──────────────────────────────────────────────┐
+│ AgentCore Runtime (customJWTAuthorizer)        │
+│   validates the Cognito JWT, then runs...      │
+│   ┌────────────────────────────────────────┐  │
+│   │ agent.py — Strands agent + Amazon Nova  │  │
+│   │   opens the tool gateways it is          │  │
+│   │   configured/authorized to use          │  │
+│   └───────────────┬────────────────────────┘  │
+│         AgentCore Gateway (MCP)                 │
+│   → API Gateway + Lambda backend (real data)    │
+│   (optional per-request Verified Permissions)   │
+└──────────────────────────────────────────────┘
+     │ 3. { "output": { "text": "<markdown>" } }
+     ▼
+  Browser renders the Markdown (tables included)
+```
+
+> The **Live backend data** mode is simpler: the SPA skips Cognito and the agent
+> and calls the deployed backend API directly (`BACKEND_API_URL`), formatting the
+> JSON itself. Good for demos where you don't need the LLM.
+
+**"Connected to AWS" step by step:**
+
+1. **Sign in (passwordless email OTP)** — the user enters their email; `app.js`
+   calls Cognito `InitiateAuth` with the `USER_AUTH` flow and the `EMAIL_OTP`
+   factor, so Cognito emails a 6-digit code. The user enters the code, `app.js`
+   calls `RespondToAuthChallenge`, and Cognito returns the **access-token JWT**,
+   which is kept in memory. No password, no SES, no Lambda — Cognito sends the
+   email itself using the pool's `COGNITO_DEFAULT` email configuration.
+2. **Send a message** — the SPA `POST`s to
+   `{AGENTCORE_ENDPOINT}/runtimes/{url-encoded ARN}/invocations?qualifier=DEFAULT`
+   with `Authorization: Bearer <JWT>` and a JSON body `{ "prompt": "…" }`.
+   The runtime's custom JWT authorizer validates the token (that's why the
+   backend was configured with an `Authorization` header allowlist).
+3. **The agent responds** — `agent.py` returns `{ "output": { "text": "…" } }`.
+   The text is GitHub-flavored Markdown, which the SPA renders with `marked`
+   (so the agent's tables show up as real tables).
+
+No SigV4 signing happens in the browser — the Cognito JWT is the credential the
+runtime expects, which keeps the frontend a plain static site.
+
+## Configuration (`config.js`)
+
+The SPA reads `window.WORKSHOP_CONFIG` at load time:
+
+| Key | Meaning |
+|-----|---------|
+| `COGNITO_USER_POOL_ID` | Cognito user pool for sign-in |
+| `COGNITO_CLIENT_ID` | Cognito app client id |
+| `COGNITO_REGION` | AWS region for Cognito + AgentCore |
+| `AGENTCORE_RUNTIME_ARN` | ARN of the deployed agent runtime |
+| `AGENTCORE_ENDPOINT` | `https://bedrock-agentcore.{region}.amazonaws.com` |
+| `S3_BUCKET_NAME` | Bucket hosting this SPA (informational) |
+| `BACKEND_API_URL` | *(optional)* the deployed backend tools API (SAM stack). When set, the SPA answers from this real data even without the full agent runtime. |
+
+`static/config.js` in the repo ships with `YOUR_...` placeholders (plus a real
+`BACKEND_API_URL` if a backend is deployed). Fill in the values by hand, or — on
+the Cognito/`bootstrap-stack` path — let `AgentCode/launchAgent.sh` regenerate it
+and publish the SPA to S3/CloudFront. On Amplify, inject the values via
+environment variables (see below).
+
+## Demo mode (run it with zero AWS)
+
+If the Cognito/runtime values in `config.js` are still placeholders, the app
+runs without the full agent runtime. Enter any email, then use the code
+**`123456`** to "sign in". What happens next depends on `BACKEND_API_URL`:
+
+- **`BACKEND_API_URL` set** → the SPA calls the **deployed AWS backend** directly
+  and composes answers from real data (surplus, needs, pantry, volunteers,
+  vehicles, guidelines). A green **Live backend data** badge shows. This is the
+  quickest way to demo the backend working end to end.
+- **`BACKEND_API_URL` not set** → fully offline mocked replies, with a yellow
+  **Demo mode** badge.
+
+When the full Cognito + AgentCore runtime is configured, the SPA calls the real
+agent instead and shows **Connected to AWS**.
+
+This lets you see the whole UI and the "How it works" panel before deploying
+anything. Serve the folder with any static server:
+
+```bash
+# from the static/ directory
+python -m http.server 8000
+# then open http://localhost:8000
+```
+
+When connected to real AWS, the header shows a green **Connected to AWS** badge.
+
+## Deploying to AWS Amplify Hosting
+
+The repo root has an [`amplify.yml`](../amplify.yml) build spec. Since the SPA is
+a no-build static site, Amplify simply publishes the `static/` directory over
+HTTPS + CDN.
+
+1. In the Amplify console, **connect this repository** (or drag-and-drop the
+   `static/` folder for a manual deploy).
+2. Amplify auto-detects `amplify.yml` at the repo root (`baseDirectory: static`).
+3. Deploy — Amplify serves `static/` at `/`.
+
+To inject `config.js` from Amplify environment variables at build time (instead
+of committing real values), set `COGNITO_*`, `AGENTCORE_*`, and `BACKEND_API_URL`
+in **Amplify console → Environment variables** and uncomment the `envsubst`-style
+block in `amplify.yml`.
+
+## Motion & accessibility
+
+The UI uses an animated aurora backdrop, entrance/stagger animations, and glow
+effects. All of it is disabled automatically for users with
+`prefers-reduced-motion: reduce`, so the app stays usable and calm for anyone
+who opts out of motion.
+
+## Deploying with the agent backend (S3 + CloudFront path)
+
+From `static/AgentCode`:
+
+```bash
+./launchAgent.sh          # full flow (venv, deploy runtime, publish SPA + config)
+./launchAgent.sh --skip-venv   # if deps are already installed
+```
+
+`launchAgent.sh` will:
+
+1. Deploy the AgentCore runtime (via `deploy-agentcore-runtime.sh`).
+2. Generate `config.js` with the live Cognito + runtime values.
+3. `aws s3 sync` this `static/` folder (excluding `AgentCode/`) to the bucket.
+4. Copy the generated `config.js` to the bucket root and `/public/`.
+5. Invalidate the CloudFront cache so the new SPA is served immediately.
+
+## Enabling email OTP on Cognito (one-time setup, no SES)
+
+For the live flow to work, the user pool and app client must allow passwordless
+email OTP. None of this uses SES:
+
+1. **User pool → Sign-in / Authentication methods** — enable **Email OTP** (a.k.a.
+   the "Email message one-time password" / choice-based authentication factor).
+2. **User pool → Messaging → Email** — set email to **"Send email with Cognito"**
+   (`COGNITO_DEFAULT`). This sends from a Cognito address with no SES setup.
+   (Note the ~50 emails/day cap — fine for demos.)
+3. **App client → Authentication flows** — enable the **`USER_AUTH`** (choice-based
+   sign-in) flow, and use a **public client with no client secret** (the SPA
+   can't hold a secret).
+4. **Users** — each signing-in user must exist in the pool with a **verified
+   email** attribute. Self sign-up can create them, or create them in the console.
+
+If `InitiateAuth` returns an "unexpected challenge" error, one of steps 1–3 is
+usually missing.
+
+## Notes & limits
+
+- **Email delivery:** Cognito default email is rate-limited (~50/day) and may
+  land in spam. It's meant for low volume / demos, which is why we use it here
+  instead of SES.
+- **Users must exist with a verified email.** The OTP flow signs in an existing
+  user; it doesn't create accounts unless self sign-up is enabled on the pool.
+- **CORS:** the AgentCore Runtime endpoint must allow the CloudFront origin for
+  the browser `fetch` to succeed. Serving the SPA from a different origin than
+  configured may cause a CORS error on invoke. (The Cognito IDP endpoint used
+  for sign-in allows browser calls.)
+- **Dependency:** `marked` loads from a CDN, so the app needs internet access on
+  first load. Sign-in calls the Cognito IDP HTTPS API directly (no auth SDK).

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<!--
+  Good Neighbor Agent - Community Waste Recovery
+  Frontend SPA. Talks to the AWS Bedrock AgentCore Runtime using a Cognito
+  JWT as a bearer token. Config comes from config.js (window.WORKSHOP_CONFIG).
+  MIT License - Copyright (c) 2026 Dineshraj Dhanapathy@DD
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Good Neighbor Agent — Community Waste Recovery</title>
+
+  <!-- marked: render the agent's Markdown (incl. tables) as HTML.
+       Cognito email-OTP sign-in uses the Cognito IDP HTTPS API directly
+       (see app.js), so no auth SDK is needed. -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- ============================ HEADER ============================ -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">🌱</span>
+        <div>
+          <h1>Good Neighbor Agent</h1>
+          <p class="tagline">Community Waste Recovery</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="mode-badge" class="badge badge-demo">Demo mode</span>
+        <button id="how-btn" class="ghost-btn" title="How it works">How it works</button>
+        <button id="logout-btn" class="ghost-btn hidden">Sign out</button>
+      </div>
+    </header>
+
+    <!-- ============================ LOGIN ============================ -->
+    <section id="login-view" class="view">
+      <div class="card login-card">
+        <div class="login-hero">
+          <span class="login-hero-logo">🌱</span>
+          <h2>Welcome back</h2>
+        </div>
+        <p class="muted">
+          Enter your email and we'll send you a one-time code. Identities
+          represent organizations (donor, recipient, coordinator) — the agent
+          filters the tools each org can see.
+        </p>
+
+        <!-- Step 1: email -> request a code -->
+        <form id="email-form">
+          <label>
+            Email
+            <input id="email" type="email" autocomplete="email"
+                   placeholder="you@organization.org" required />
+          </label>
+          <button type="submit" class="primary-btn" id="email-submit">Send code</button>
+        </form>
+
+        <!-- Step 2: enter the 6-digit code -->
+        <form id="otp-form" class="hidden">
+          <p class="muted small" id="otp-sent-to"></p>
+          <label>
+            One-time code
+            <input id="otp" type="text" inputmode="numeric" autocomplete="one-time-code"
+                   pattern="[0-9]*" maxlength="8" placeholder="123456" required />
+          </label>
+          <button type="submit" class="primary-btn" id="otp-submit">Verify &amp; sign in</button>
+          <button type="button" class="ghost-btn full" id="otp-back">Use a different email</button>
+        </form>
+
+        <p id="login-error" class="error hidden"></p>
+        <p class="muted small" id="login-demo-hint"></p>
+      </div>
+    </section>
+
+    <!-- ============================ CHAT ============================ -->
+    <section id="chat-view" class="view hidden">
+      <div class="chat-wrap">
+        <div id="messages" class="messages"></div>
+        <form id="chat-form" class="composer">
+          <textarea id="chat-input" rows="1"
+            placeholder="e.g. A grocer has 40 lbs of produce to pick up by Friday — which food bank needs it, and who could drive it?"></textarea>
+          <button type="submit" class="primary-btn" id="send-btn">Send</button>
+        </form>
+        <div class="suggestions" id="suggestions"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ==================== "HOW IT WORKS" MODAL ==================== -->
+  <div id="how-modal" class="modal hidden">
+    <div class="modal-body">
+      <button class="modal-close" id="how-close">×</button>
+      <h2>How this works</h2>
+      <p class="muted">
+        This app runs in one of three modes depending on what's set in
+        <code>config.js</code> — the badge in the header shows which one is
+        active:
+      </p>
+      <ol class="flow">
+        <li><b>Connected to AWS</b> — full agent path: sign in with Amazon Cognito (email one-time code → JWT), then the app calls the AgentCore Runtime, which runs the Strands agent on <b>Amazon Nova</b> and answers from live tools.</li>
+        <li><b>Live backend data</b> — the app calls the deployed backend API directly (<code>BACKEND_API_URL</code>) and formats the real data itself. No Cognito, no agent — handy for demos.</li>
+        <li><b>Demo mode</b> — no AWS configured; replies are mocked locally so you can explore the UI (sign in with any email + code <code>123456</code>).</li>
+      </ol>
+
+      <p class="muted">In <b>Connected to AWS</b> mode, a message follows this path:</p>
+      <div class="diagram">
+        <pre>
+ You ─▶ Cognito ─(JWT)─▶ AgentCore Runtime ─▶ Strands agent + Amazon Nova
+                                                   │
+                                          AgentCore Gateway (MCP)
+                                          (OAuth2 token from AgentCore Identity)
+                                                   │
+                                      openApiSchema target "BackendTools"
+                                                   │
+                                    API Gateway ─▶ Lambda ─▶ community data
+                                 (surplus · catalog · needs · pantry ·
+                                  volunteers · vehicles · guidelines)
+
+        (optional) Amazon Verified Permissions filters tools per request
+        </pre>
+      </div>
+      <p class="muted small">
+        The agent is <b>grounded</b>: it only states what a tool returned during
+        your conversation. Config values live in <code>config.js</code>
+        (Cognito, AgentCore runtime ARN, and/or <code>BACKEND_API_URL</code>).
+      </p>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
